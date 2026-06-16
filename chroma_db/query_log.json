@@ -1,0 +1,20 @@
+[
+  {
+    "question": "Who is the king of India?",
+    "mode": "direct",
+    "time": 34.0,
+    "verified": true
+  },
+  {
+    "question": "Who is the king of India?",
+    "mode": "fallback_rag",
+    "time": 8.4,
+    "verified": true
+  },
+  {
+    "question": "What is the process to file an FIR under CrPC?",
+    "mode": "agentic",
+    "time": 20.8,
+    "verified": true
+  }
+]
