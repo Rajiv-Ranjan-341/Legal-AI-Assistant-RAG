@@ -33,7 +33,7 @@ import * as React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 // @ts-ignore
-import { queryLegal } from "@/lib/api";
+import { queryLegalStream } from "@/lib/api";
 // @ts-ignore
 import { useChat } from "@/lib/chat-context";
 
@@ -102,6 +102,7 @@ interface ChatMsg {
     verified?: boolean;
     modeUsed?: string;
     responseTime?: string;
+    streaming?: boolean;
 }
 
 const MODES = [
@@ -119,6 +120,7 @@ export function AnimatedAIChat() {
     });
     const [inputFocused, setInputFocused] = useState(false);
     const [selectedMode, setSelectedMode] = useState("direct");
+    const [streamStatus, setStreamStatus] = useState("");
 
     const { messages, setMessages, newChat, saveToHistory } = useChat();
     const [showSources, setShowSources] = useState(false);
@@ -180,30 +182,88 @@ export function AnimatedAIChat() {
         adjustHeight(true);
 
         const userMsg: ChatMsg = { role: "user", content: question };
-        setMessages((prev: ChatMsg[]) => [...prev, userMsg]);
+        setMessages((prev: ChatMsg[]) => [
+            ...prev,
+            userMsg,
+            { role: "assistant", content: "", streaming: true },
+        ]);
         setLoading(true);
+        setStreamStatus("");
 
         try {
-            const res = await queryLegal(question, selectedMode);
-            const aiMsg: ChatMsg = {
-                role: "assistant",
-                content: res.answer,
-                sources: res.sources || [],
-                verified: res.verified,
-                modeUsed: res.mode_used,
-                responseTime: res.responseTime,
-            };
-            setMessages((prev: ChatMsg[]) => [...prev, aiMsg]);
-            setTimeout(() => saveToHistory(), 0);
+            await queryLegalStream(question, selectedMode, {
+                onToken: (token: string) => {
+                    setMessages((prev: ChatMsg[]) => {
+                        const updated = [...prev];
+                        const last = updated[updated.length - 1];
+                        if (last?.role === "assistant") {
+                            updated[updated.length - 1] = {
+                                ...last,
+                                content: last.content + token,
+                            };
+                        }
+                        return updated;
+                    });
+                },
+                onStatus: (msg: string) => setStreamStatus(msg),
+                onSources: (sources: any[]) => {
+                    setMessages((prev: ChatMsg[]) => {
+                        const updated = [...prev];
+                        const last = updated[updated.length - 1];
+                        if (last?.role === "assistant") {
+                            updated[updated.length - 1] = { ...last, sources };
+                        }
+                        return updated;
+                    });
+                },
+                onDone: (data: any) => {
+                    setMessages((prev: ChatMsg[]) => {
+                        const updated = [...prev];
+                        const last = updated[updated.length - 1];
+                        if (last?.role === "assistant") {
+                            updated[updated.length - 1] = {
+                                ...last,
+                                verified: data.verified,
+                                modeUsed: data.mode_used,
+                                responseTime: data.responseTime,
+                                streaming: false,
+                            };
+                        }
+                        return updated;
+                    });
+                    setTimeout(() => saveToHistory(), 0);
+                },
+                onClear: () => {
+                    setMessages((prev: ChatMsg[]) => {
+                        const updated = [...prev];
+                        const last = updated[updated.length - 1];
+                        if (last?.role === "assistant") {
+                            updated[updated.length - 1] = {
+                                ...last,
+                                content: "",
+                            };
+                        }
+                        return updated;
+                    });
+                },
+            });
         } catch (err: any) {
-            const errorMsg: ChatMsg = {
-                role: "assistant",
-                content: `Error: ${err.response?.data?.detail || err.message || "Failed to get response. Is the backend running?"}`,
-                verified: false,
-            };
-            setMessages((prev: ChatMsg[]) => [...prev, errorMsg]);
+            setMessages((prev: ChatMsg[]) => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                if (last?.role === "assistant") {
+                    updated[updated.length - 1] = {
+                        ...last,
+                        content: `Error: ${err.message || "Failed to get response. Is the backend running?"}`,
+                        streaming: false,
+                        verified: false,
+                    };
+                }
+                return updated;
+            });
         } finally {
             setLoading(false);
+            setStreamStatus("");
         }
     };
 
@@ -339,22 +399,24 @@ export function AnimatedAIChat() {
                         <div className="flex-1 overflow-y-auto px-6 py-6">
                             <div className="max-w-3xl mx-auto flex flex-col gap-5">
                                 <AnimatePresence initial={false}>
-                                    {messages.map((msg: ChatMsg, i: number) => (
-                                        <motion.div
-                                            key={i}
-                                            initial={{ opacity: 0, y: 12 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            transition={{ duration: 0.3 }}
-                                        >
-                                            <MessageBubble
-                                                message={msg}
-                                                onViewSources={handleViewSources}
-                                            />
-                                        </motion.div>
-                                    ))}
+                                    {messages.map((msg: ChatMsg, i: number) =>
+                                        msg.streaming && !msg.content ? null : (
+                                            <motion.div
+                                                key={i}
+                                                initial={{ opacity: 0, y: 12 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                transition={{ duration: 0.3 }}
+                                            >
+                                                <MessageBubble
+                                                    message={msg}
+                                                    onViewSources={handleViewSources}
+                                                />
+                                            </motion.div>
+                                        )
+                                    )}
                                 </AnimatePresence>
 
-                                {loading && (
+                                {loading && !(messages[messages.length - 1]?.content) && (
                                     <motion.div
                                         initial={{ opacity: 0, y: 10 }}
                                         animate={{ opacity: 1, y: 0 }}
@@ -366,7 +428,7 @@ export function AnimatedAIChat() {
                                         <div className="bg-white/[0.04] border border-white/[0.06] rounded-2xl px-4 py-3">
                                             <div className="flex items-center gap-2 text-sm text-white/50">
                                                 <Loader2 className="w-4 h-4 animate-spin" />
-                                                <span>Searching legal database</span>
+                                                <span>{streamStatus || "Connecting..."}</span>
                                                 <TypingDots />
                                             </div>
                                         </div>
@@ -655,11 +717,14 @@ function MessageBubble({
                             <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                 {message.content || ""}
                             </ReactMarkdown>
+                            {message.streaming && (
+                                <span className="inline-block w-1.5 h-4 bg-violet-400/70 rounded-sm animate-pulse align-text-bottom" />
+                            )}
                         </div>
                     )}
                 </div>
 
-                {!isUser && (
+                {!isUser && !message.streaming && (
                     <div className="flex items-center gap-3 mt-2 ml-1">
                         {message.verified !== undefined && (
                             message.verified ? (

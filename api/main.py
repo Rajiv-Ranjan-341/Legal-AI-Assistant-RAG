@@ -12,9 +12,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from src.agents.graph import create_agent_graph
 from src.agents.rag_chain import query_rag
 from config.settings import settings
@@ -43,6 +43,111 @@ def _save_query_log():
         QUERY_LOG_PATH.write_text(json.dumps(query_log, indent=2))
     except OSError as e:
         logger.warning(f"Failed to persist query log: {e}")
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+async def _stream_direct_rag(question: str):
+    from src.retrieval.hybrid_search import hybrid_search
+    from src.retrieval.reranker import rerank
+    from src.agents.rag_chain import format_context, RAG_PROMPT
+    from src.agents.prompts import SYSTEM_PROMPT
+    from src.llm import get_llm
+
+    start = time.time()
+    yield _sse("status", {"message": "Searching legal database..."})
+
+    results = await asyncio.to_thread(hybrid_search, question, 20)
+
+    yield _sse("status", {"message": "Reranking results..."})
+    reranked = await asyncio.to_thread(rerank, question, results, 5)
+
+    yield _sse("status", {"message": "Generating answer..."})
+
+    context = format_context(reranked)
+    llm = get_llm()
+    msgs = [
+        SystemMessage(content=SYSTEM_PROMPT),
+        HumanMessage(content=RAG_PROMPT.format(context=context, question=question)),
+    ]
+
+    async for chunk in llm.astream(msgs):
+        token = getattr(chunk, "content", "") or ""
+        if token:
+            yield _sse("token", {"token": token})
+
+    sources = [
+        {
+            "source_file": doc.metadata.get("source_file", "Unknown"),
+            "legal_section": doc.metadata.get("legal_section", ""),
+            "page": doc.metadata.get("page", ""),
+            "rerank_score": doc.metadata.get("rerank_score", 0),
+            "excerpt": doc.page_content[:300],
+        }
+        for doc in reranked
+    ]
+    yield _sse("sources", {"sources": sources})
+
+    elapsed = round(time.time() - start, 1)
+    async with _log_lock:
+        query_log.append({"question": question, "mode": "direct", "time": elapsed, "verified": True})
+        _save_query_log()
+
+    yield _sse("done", {"verified": True, "mode_used": "direct_rag"})
+
+
+async def _stream_agentic(question: str):
+    start = time.time()
+    yield _sse("status", {"message": "Starting agentic analysis..."})
+
+    input_state = {
+        "messages": [HumanMessage(content=question)],
+        "verified": False,
+        "verification_attempts": 0,
+        "used_fallback": False,
+    }
+
+    try:
+        current_answer = ""
+        async for event in agent_graph.astream_events(input_state, version="v2"):
+            kind = event["event"]
+            node = event.get("metadata", {}).get("langgraph_node", "")
+
+            if kind == "on_chat_model_start" and node == "agent":
+                if current_answer:
+                    current_answer = ""
+                    yield _sse("clear", {})
+                    yield _sse("status", {"message": "Refining answer..."})
+
+            elif kind == "on_chat_model_stream" and node == "agent":
+                chunk = event["data"]["chunk"]
+                token = getattr(chunk, "content", "") or ""
+                if token:
+                    current_answer += token
+                    yield _sse("token", {"token": token})
+
+            elif kind == "on_tool_start":
+                tool_name = event.get("name", "tool")
+                yield _sse("status", {"message": f"Using {tool_name}..."})
+
+            elif kind == "on_tool_end":
+                yield _sse("status", {"message": "Analyzing results..."})
+
+        elapsed = round(time.time() - start, 1)
+        async with _log_lock:
+            query_log.append({"question": question, "mode": "agentic", "time": elapsed, "verified": True})
+            _save_query_log()
+
+        yield _sse("done", {"verified": True, "mode_used": "agentic"})
+
+    except Exception as e:
+        logger.warning(f"Agentic stream failed: {e}, falling back to direct RAG")
+        yield _sse("clear", {})
+        yield _sse("status", {"message": "Falling back to direct search..."})
+        async for evt in _stream_direct_rag(question):
+            yield evt
 
 
 @asynccontextmanager
@@ -163,6 +268,18 @@ async def query(request: QueryRequest):
             verified=True,
             mode_used="fallback_rag",
         )
+
+
+# ──────────────────── Streaming Query Endpoint ────────────────────
+
+@router.post("/query/stream")
+async def query_stream(request: QueryRequest):
+    generator = _stream_direct_rag(request.question) if request.mode == "direct" else _stream_agentic(request.question)
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ──────────────────── Documents Endpoints ────────────────────

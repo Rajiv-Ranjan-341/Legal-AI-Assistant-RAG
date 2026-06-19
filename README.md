@@ -83,8 +83,8 @@ Our system solves this with three innovations:
                   |                      |              |
                   v                      v              |
            +------------+        LLM Generation        |
-           |  Verifier  |               |              |
-           +------------+               v              |
+           |  Verifier  |          (streamed via SSE)  |
+           +------------+               |              |
                   |                   Answer            |
                   v                                    |
            Verified Answer                             |
@@ -133,10 +133,10 @@ The core retrieval-augmented generation pipeline that powers both Direct RAG and
 │                                    │                                       │
 │                                    v                                       │
 │                   ┌─────────────────────────────────────────┐              │
-│                   │          LLM Generation                 │              │
+│                   │          LLM Generation (Streamed)      │              │
 │                   │  Groq (Llama 3.3 70B) / Gemini 2.0     │              │
 │                   │  System prompt + context + question     │              │
-│                   │  → Cited, structured legal answer       │              │
+│                   │  → Tokens streamed to frontend via SSE  │              │
 │                   └────────────────┬────────────────────────┘              │
 │                                    │                                       │
 │                                    v                                       │
@@ -230,8 +230,8 @@ User: "Can police arrest me without notice?"
    Selects top 5 most relevant
              |
              v
-     LLM Generation
-     Synthesizes answer with citations
+     LLM Generation (Streamed via SSE)
+     Tokens sent to frontend as generated
              |
              v
         Verifier
@@ -310,6 +310,7 @@ This means the LLM sees the **complete legal picture** — not just the section 
 | **Cross-Reference Extraction** | Regex-based extraction of legal citations with typed relations (qualifies, procedure, penalty, defines) |
 | **4-Tool Agentic System** | LangGraph agent with legal search, act-specific search, cross-referencing, and compliance tools |
 | **Self-Verification** | Agent checks its answer against sources for hallucinations, self-corrects up to 2x |
+| **Streaming Responses** | Server-Sent Events (SSE) stream LLM tokens to the frontend as they're generated — no waiting for the full answer |
 | **Automatic Fallback** | If agentic mode fails, system falls back to Direct RAG — user always gets an answer |
 | **Warm Retrieval** | All indices (Vector DB, BM25, Knowledge Graph, Reranker) loaded once and kept in memory |
 | **Persistent Query Log** | Query analytics persisted to disk as JSON, survives server restarts |
@@ -326,7 +327,8 @@ A modern single-page application built with **React 19**, **Vite**, **Tailwind C
 - Animated landing page with gradient background effects and cursor-reactive glow
 - Compact **pill-shaped input bar** with mode selector (`+` button), auto-resizing textarea, and send button
 - Two retrieval modes: **Agentic** (LangGraph agent with tools and self-verification) and **Direct RAG** (hybrid retrieval + LLM generation)
-- Streaming-style message bubbles with markdown rendering, verification badges, response time, and copy-to-clipboard
+- **Real-time streaming** — LLM tokens stream into the chat bubble as they're generated via SSE, with a pulsing cursor during generation and live status updates ("Searching...", "Reranking...", "Generating...")
+- Message bubbles with markdown rendering, verification badges, response time, and copy-to-clipboard
 - **Sources panel** slides in from the right showing retrieved legal provisions with rerank scores and expandable excerpts
 - Quick suggestion chips on the landing page for common legal queries
 
@@ -424,6 +426,7 @@ python -m pytest tests/ -v
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/query` | Query the system (body: `{question, mode: "direct"\|"agentic"}`) |
+| `POST` | `/query/stream` | Streaming query via SSE — streams tokens, status updates, and sources as events |
 | `GET` | `/documents` | List all ingested documents with chunk stats |
 | `GET` | `/documents/{filename}/chunks` | Browse chunks of a specific document (paginated, searchable) |
 | `GET` | `/graph/stats` | Knowledge graph statistics (nodes, edges, top connected sections) |
@@ -539,6 +542,7 @@ chroma_db/                       Persisted indices (ChromaDB, BM25, knowledge gr
 | **Reranker Model** | Already singleton | Already singleton |
 | **Query Rewriter LLM** | (didn't exist) | LLM instance cached after first call |
 | **Query Log** | In-memory only, lost on restart | Persisted to JSON, loaded on startup |
+| **Response Streaming** | User waits for full LLM response | Tokens streamed via SSE as generated — perceived latency drops to first-token time |
 
 All retrieval components are **kept warm in memory** after first load. First query pays the cold-load cost; every subsequent query hits memory directly.
 
@@ -555,6 +559,7 @@ Knowledge Graph         | Structurally related provisions (cross-referenced)
 Query Rewriter          | Bridges gap between casual language and legal terms
 Cross-Encoder Reranker  | Filters noise — often matters more than the LLM choice
 Self-Verification       | Catches hallucinated citations and contradictions
+SSE Streaming           | User reads the answer as it's generated — no blank wait
 ```
 
 ---
