@@ -9,7 +9,7 @@ pinned: true
 ---
 
 <p align="center">
-  <img src="logo_rag.png" alt="Indian Legal AI Assistant" width="160" />
+  <img src="frontend/public/logo.png" alt="Indian Legal AI Assistant" width="160" />
 </p>
 
 <h1 align="center">Indian Legal AI Assistant</h1>
