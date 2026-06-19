@@ -1,3 +1,13 @@
+---
+title: Indian Legal AI Assistant
+emoji: ⚖️
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: true
+---
+
 <p align="center">
   <img src="logo_rag.png" alt="Indian Legal AI Assistant" width="160" />
 </p>
