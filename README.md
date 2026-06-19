@@ -51,119 +51,23 @@ Our system solves this with three innovations:
 
 ## System Design
 
+<p align="center">
+  <img src="images/legal_rag_architecture.png" alt="Full System Architecture" width="800" />
+</p>
+
 ### High-Level Architecture
 
-```
-                         User Question
-                              |
-                              v
-                   +---------------------+
-                   |   React Frontend    |
-                   |  (Vite + Tailwind)  |
-                   +---------------------+
-                              |
-                              v
-                   +---------------------+
-                   |  FastAPI Backend     |
-                   +---------------------+
-                              |
-                  +-----------+-----------+
-                  |                       |
-                  v                       v
-          Agentic Mode             Direct RAG Mode
-                  |                       |
-                  v                       v
-        +------------------+     Query Rewriter (LLM)
-        | LangGraph Agent  |             |
-        | (4 Legal Tools)  |             v
-        +------------------+     Hybrid Retrieval
-                  |              +-------+-------+------+
-                  |              |       |       |      |
-                  v              v       v       v      |
-           Tool Execution    Vector   BM25   Graph     |
-                  |          Search  Search Expansion   |
-                  |              |       |       |      |
-                  |              +-------+-------+      |
-                  |                      |              |
-                  |              Reciprocal Rank        |
-                  |                 Fusion              |
-                  |                      |              |
-                  |              Cross-Encoder          |
-                  |                 Reranker            |
-                  |                      |              |
-                  v                      v              |
-           +------------+        LLM Generation        |
-           |  Verifier  |          (streamed via SSE)  |
-           +------------+               |              |
-                  |                   Answer            |
-                  v                                    |
-           Verified Answer                             |
-```
+<p align="center">
+  <img src="images/legal_ai_system_architecture.png" alt="High-Level Architecture" width="600" />
+</p>
 
 ### RAG Architecture
 
 The core retrieval-augmented generation pipeline that powers both Direct RAG and the Agentic tools:
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           RAG PIPELINE                                     │
-│                                                                             │
-│  ┌──────────────┐    ┌─────────────────────────────────────────────────┐   │
-│  │  User Query   │───>│           Query Rewriter (LLM)                 │   │
-│  └──────────────┘    │  "Can police arrest me?" ──>                    │   │
-│                      │  "Arrest without warrant under CrPC Section 41" │   │
-│                      └──────────────────┬──────────────────────────────┘   │
-│                                         │                                   │
-│                          ┌──────────────┼──────────────┐                   │
-│                          │              │              │                    │
-│                          v              v              v                    │
-│                   ┌────────────┐ ┌────────────┐ ┌──────────────┐          │
-│                   │   Dense    │ │   Sparse   │ │  Knowledge   │          │
-│                   │  Search    │ │  Search    │ │    Graph     │          │
-│                   │ (ChromaDB) │ │ (BM25Okapi)│ │  Expansion   │          │
-│                   │            │ │            │ │  (NetworkX)  │          │
-│                   │ Semantic   │ │ Keyword    │ │ Cross-ref    │          │
-│                   │ similarity │ │ matching   │ │ traversal    │          │
-│                   │ top-20     │ │ top-20     │ │ 1-hop        │          │
-│                   └─────┬──────┘ └─────┬──────┘ └──────┬───────┘          │
-│                         │              │               │                   │
-│                         v              v               v                   │
-│                   ┌─────────────────────────────────────────┐              │
-│                   │       Reciprocal Rank Fusion (RRF)      │              │
-│                   │  Merge + deduplicate + score (k=60)     │              │
-│                   └────────────────┬────────────────────────┘              │
-│                                    │                                       │
-│                                    v                                       │
-│                   ┌─────────────────────────────────────────┐              │
-│                   │     Cross-Encoder Reranker              │              │
-│                   │  ms-marco-MiniLM-L-6-v2                 │              │
-│                   │  Full attention on (query, chunk) pairs │              │
-│                   │  Select top-5                           │              │
-│                   └────────────────┬────────────────────────┘              │
-│                                    │                                       │
-│                                    v                                       │
-│                   ┌─────────────────────────────────────────┐              │
-│                   │          LLM Generation (Streamed)      │              │
-│                   │  Groq (Llama 3.3 70B) / Gemini 2.0     │              │
-│                   │  System prompt + context + question     │              │
-│                   │  → Tokens streamed to frontend via SSE  │              │
-│                   └────────────────┬────────────────────────┘              │
-│                                    │                                       │
-│                                    v                                       │
-│                   ┌─────────────────────────────────────────┐              │
-│                   │         Self-Verification               │              │
-│                   │  Check citations against sources        │              │
-│                   │  Detect contradictions & hallucinations │              │
-│                   │  ┌──────┐              ┌─────────────┐ │              │
-│                   │  │ PASS │──> Answer    │ FAIL (<2x)  │ │              │
-│                   │  └──────┘              └──────┬──────┘ │              │
-│                   │                               │        │              │
-│                   │                     Re-query with      │              │
-│                   │                     correction msg     │              │
-│                   └─────────────────────────────────────────┘              │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="images/legal_rag_pipeline.png" alt="RAG Pipeline" width="600" />
+</p>
 
 **Why three retrieval channels?**
 
@@ -177,126 +81,31 @@ No single channel covers everything. RRF fusion combines their strengths — a p
 
 ### Ingestion Pipeline (Offline)
 
-```
-PDF / TXT Documents
-        |
-        v
-  1. Document Loader           Parse PDFs page-by-page (PyPDF), text files (UTF-8)
-        |
-        v
-  2. Legal Preprocessor        Normalize abbreviations (Sec. -> Section, Art. -> Article)
-        |                      Remove page headers, fix hyphenation, drop empty pages
-        v
-  3. Legal-Aware Chunker       Split at Section/Article/Chapter boundaries
-        |                      1000-char chunks, 200-char overlap
-        |                      Extract section metadata via regex
-        v
-  4. Cross-Reference           Regex extraction of legal references:
-     Extractor                 "subject to Section 42", "read with Section 46",
-        |                      "as defined in Section 300", "punishable under Section 302"
-        |                      Classifies: qualifies | procedure | penalty | defines | references | mentions
-        v
-  5. Vector + BM25 Index       ChromaDB (dense embeddings) + BM25Okapi (sparse, pickled)
-        |
-        v
-  6. Knowledge Graph           NetworkX directed graph
-                               Nodes = sections + chunks
-                               Edges = cross-references with typed relations
-                               Persisted to disk, loaded into memory at runtime
-```
+<p align="center">
+  <img src="images/legal_document_ingestion_pipeline.png" alt="Ingestion Pipeline" width="600" />
+</p>
 
 ### Query Pipeline (Runtime)
 
-```
-User: "Can police arrest me without notice?"
-                    |
-                    v
-          Query Rewriter (LLM)
-          Rewrites casual language into legal terminology
-          -> "Arrest without warrant under CrPC Section 41 provisions"
-                    |
-                    v
-     +--------------+--------------+
-     |              |              |
-     v              v              v
-  Vector         BM25          Graph
-  Search         Search        Expansion
-  (top 20)       (top 20)     (1-hop neighbors)
-     |              |              |
-     |   Finds:     |   Finds:    |   Finds:
-     |   Sec 41     |   Sec 41    |   Sec 42 (linked)
-     |              |             |   Sec 46 (linked)
-     |              |             |   Art 21 (linked)
-     |              |              |
-     +-------+------+--------------+
-             |
-             v
-   Reciprocal Rank Fusion
-   Merges and deduplicates results with RRF scoring
-             |
-             v
-   Cross-Encoder Reranker
-   Scores each (query, chunk) pair with full attention
-   Selects top 5 most relevant
-             |
-             v
-     LLM Generation (Streamed via SSE)
-     Tokens sent to frontend as generated
-             |
-             v
-        Verifier
-        Checks: citations correct? contradictions? hallucinations?
-             |
-        +----+----+
-        |         |
-     Pass       Fail (< 2 attempts)
-        |         |
-        v         v
-     Answer    Re-query with correction message
-```
+<p align="center">
+  <img src="images/legal_rag_query_trace.png" alt="Query Pipeline Trace" width="600" />
+</p>
 
 ### Agent State Machine (LangGraph)
 
-```
-START --> Agent Node --[tool calls]--> Tools Node --> Agent Node (loop)
-              |                            |
-              |                       (on failure)
-         [no tool calls]                   |
-              |                     Direct RAG fallback
-              v
-         Verifier Node --[pass]--> END
-              |
-         [fail, < 2 attempts]
-              |
-         Agent Node (with correction message)
-```
+<p align="center">
+  <img src="images/langgraph_agent_execution_loop.png" alt="LangGraph Agent Loop" width="550" />
+</p>
 
 The agent decides which tools to call based on the question. For "What is the punishment for theft under IPC?", it calls `search_specific_act(query, act_name="IPC")`. For "Is my business compliant with data protection laws?", it calls `generate_compliance_checklist`. If tool-calling fails entirely, the system falls back to Direct RAG — the user always gets an answer.
 
 ### Knowledge Graph — How It Works
 
-The graph doesn't replace chunking. It sits **on top of** the chunks.
+The graph doesn't replace chunking. It sits **on top of** the chunks — chunks hold the law text, the graph maps relationships between them.
 
-```
-Chunks = the law text
-Graph  = relationships between the law text
-```
-
-**Example graph structure:**
-
-```
-Section 41 (CrPC - Arrest without warrant)
-     |
-     +--[qualifies]----> Section 42 (Procedure after arrest)
-     |
-     +--[procedure]----> Section 46 (How arrest is made)
-     |
-     +--[references]---> Article 21 (Right to life and liberty)
-
-Section 302 (IPC - Punishment for murder)
-     |
-     +--[defines]------> Section 300 (Definition of murder)
-```
+<p align="center">
+  <img src="images/legal_knowledge_graph_fragment.png" alt="Knowledge Graph Fragment" width="600" />
+</p>
 
 **During retrieval:**
 1. Vector + BM25 find Section 41 (direct match)
