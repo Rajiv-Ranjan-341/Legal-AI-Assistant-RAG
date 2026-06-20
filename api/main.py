@@ -438,13 +438,15 @@ async def health():
 
 app.include_router(router, prefix="/api")
 
-if FRONTEND_DIR.is_dir():
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
+
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    if FRONTEND_DIR.is_dir():
         file_path = FRONTEND_DIR / full_path
         if file_path.is_file():
             return FileResponse(file_path)
         return FileResponse(FRONTEND_DIR / "index.html")
+    return {"status": "ok", "message": "Frontend not built. API available at /api"}
 
 
 if __name__ == "__main__":
