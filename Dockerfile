@@ -19,12 +19,6 @@ RUN apt-get update && \
 COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download ML models so startup is faster
-RUN python -c "\
-from sentence_transformers import SentenceTransformer, CrossEncoder; \
-SentenceTransformer('BAAI/bge-small-en-v1.5'); \
-CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
-
 COPY --chown=user config/ config/
 COPY --chown=user src/ src/
 COPY --chown=user api/ api/
@@ -35,6 +29,12 @@ COPY --chown=user data/raw/ data/raw/
 COPY --from=frontend-build --chown=user /build/dist frontend/dist/
 
 USER user
+
+# Pre-download ML models as the runtime user so cache is accessible
+RUN python -c "\
+from sentence_transformers import SentenceTransformer, CrossEncoder; \
+SentenceTransformer('BAAI/bge-small-en-v1.5'); \
+CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
 
 ENV PORT=7860
 EXPOSE 7860

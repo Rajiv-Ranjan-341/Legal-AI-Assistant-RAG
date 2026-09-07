@@ -16,5 +16,23 @@
     "mode": "agentic",
     "time": 20.8,
     "verified": true
+  },
+  {
+    "question": "What is the process to file an FIR under CrPC?",
+    "mode": "direct",
+    "time": 49.1,
+    "verified": true
+  },
+  {
+    "question": "how",
+    "mode": "direct",
+    "time": 7.3,
+    "verified": true
+  },
+  {
+    "question": "Section 165",
+    "mode": "direct",
+    "time": 7.1,
+    "verified": true
   }
 ]
