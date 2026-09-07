@@ -196,7 +196,11 @@ async def query(request: QueryRequest):
     start = time.time()
 
     if request.mode == "direct":
-        result = query_rag(request.question)
+        try:
+            result = query_rag(request.question)
+        except Exception as e:
+            logger.exception(f"Direct RAG query failed: {e}")
+            raise
         elapsed = round(time.time() - start, 1)
         async with _log_lock:
             query_log.append({
@@ -432,6 +436,46 @@ async def evaluate():
 @router.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@router.get("/debug")
+async def debug():
+    checks = {}
+    try:
+        from src.retrieval.bm25_store import _load_bm25
+        data = _load_bm25()
+        checks["bm25"] = f"ok ({len(data['documents'])} docs)"
+    except Exception as e:
+        checks["bm25"] = f"FAIL: {e}"
+    try:
+        from src.retrieval.vector_store import load_vector_store
+        vs = load_vector_store()
+        checks["chroma"] = f"ok ({vs._collection.count()} docs)"
+    except Exception as e:
+        checks["chroma"] = f"FAIL: {e}"
+    try:
+        from src.retrieval.reranker import rerank
+        checks["reranker_import"] = "ok"
+    except Exception as e:
+        checks["reranker_import"] = f"FAIL: {e}"
+    try:
+        from src.llm import get_llm
+        llm = get_llm()
+        checks["llm_init"] = f"ok ({settings.llm_provider})"
+    except Exception as e:
+        checks["llm_init"] = f"FAIL: {e}"
+    try:
+        from src.llm import get_llm
+        llm = get_llm()
+        from langchain_core.messages import HumanMessage
+        resp = llm.invoke([HumanMessage(content="Say hello in one word")])
+        checks["llm_call"] = f"ok: {resp.content[:50]}"
+    except Exception as e:
+        checks["llm_call"] = f"FAIL: {type(e).__name__}: {e}"
+    checks["llm_provider"] = settings.llm_provider
+    checks["groq_key_set"] = bool(settings.groq_api_key)
+    checks["gemini_key_set"] = bool(settings.gemini_api_key)
+    return checks
 
 
 # ──────────────────── Mount API + Static Files ────────────────────
