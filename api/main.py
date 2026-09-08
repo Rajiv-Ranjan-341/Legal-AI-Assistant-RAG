@@ -197,7 +197,7 @@ async def query(request: QueryRequest):
 
     if request.mode == "direct":
         try:
-            result = query_rag(request.question)
+            result = await asyncio.to_thread(query_rag, request.question)
         except Exception as e:
             logger.exception(f"Direct RAG query failed: {e}")
             raise
@@ -256,7 +256,7 @@ async def query(request: QueryRequest):
         )
     except Exception as e:
         logger.warning(f"Agentic query failed: {e}, falling back to direct RAG")
-        result = query_rag(request.question)
+        result = await asyncio.to_thread(query_rag, request.question)
         elapsed = round(time.time() - start, 1)
         async with _log_lock:
             query_log.append({
@@ -468,7 +468,7 @@ async def debug():
         from src.llm import get_llm
         llm = get_llm()
         from langchain_core.messages import HumanMessage
-        resp = llm.invoke([HumanMessage(content="Say hello in one word")])
+        resp = await asyncio.to_thread(llm.invoke, [HumanMessage(content="Say hello in one word")])
         checks["llm_call"] = f"ok: {resp.content[:50]}"
     except Exception as e:
         checks["llm_call"] = f"FAIL: {type(e).__name__}: {e}"
