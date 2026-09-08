@@ -475,6 +475,17 @@ async def debug():
     checks["llm_provider"] = settings.llm_provider
     checks["groq_key_set"] = bool(settings.groq_api_key)
     checks["gemini_key_set"] = bool(settings.gemini_api_key)
+    import httpx
+    try:
+        r = httpx.get("https://api.groq.com", timeout=10)
+        checks["groq_network"] = f"ok (status {r.status_code})"
+    except Exception as e:
+        checks["groq_network"] = f"FAIL: {type(e).__name__}: {e}"
+    try:
+        r = httpx.get("https://generativelanguage.googleapis.com", timeout=10)
+        checks["gemini_network"] = f"ok (status {r.status_code})"
+    except Exception as e:
+        checks["gemini_network"] = f"FAIL: {type(e).__name__}: {e}"
     return checks
 
 
