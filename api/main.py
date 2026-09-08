@@ -477,15 +477,20 @@ async def debug():
     checks["gemini_key_set"] = bool(settings.gemini_api_key)
     import httpx
     try:
-        r = httpx.get("https://api.groq.com", timeout=10)
-        checks["groq_network"] = f"ok (status {r.status_code})"
+        r = httpx.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {settings.groq_api_key}", "Content-Type": "application/json"},
+            json={"model": settings.groq_model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5},
+            timeout=30,
+        )
+        checks["groq_direct_http"] = f"ok (status {r.status_code}): {r.text[:100]}"
     except Exception as e:
-        checks["groq_network"] = f"FAIL: {type(e).__name__}: {e}"
+        checks["groq_direct_http"] = f"FAIL: {type(e).__name__}: {e}"
     try:
-        r = httpx.get("https://generativelanguage.googleapis.com", timeout=10)
-        checks["gemini_network"] = f"ok (status {r.status_code})"
-    except Exception as e:
-        checks["gemini_network"] = f"FAIL: {type(e).__name__}: {e}"
+        import groq as groq_sdk
+        checks["groq_sdk_version"] = groq_sdk.__version__
+    except Exception:
+        checks["groq_sdk_version"] = "unknown"
     return checks
 
 
